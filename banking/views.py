@@ -3,7 +3,8 @@ from django.shortcuts import render, redirect, get_object_or_404
 # Create your views here.
 
 
-from django.views.generic import ListView, DetailView, CreateView, DeleteView, FormView
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.views.generic import ListView, DetailView, CreateView, DeleteView, FormView, TemplateView
 from django.urls import reverse_lazy
 from django.contrib import messages
 from django.db.models import Q
@@ -11,7 +12,7 @@ from .models import Account, Transaction, Card
 from .forms import AccountForm, TransferForm, CardForm
 
 
-class AccountListView(ListView):
+class AccountListView(LoginRequiredMixin, ListView):
     model = Account
     template_name = 'banking/account_list.html'
     context_object_name = 'accounts'
@@ -20,7 +21,7 @@ class AccountListView(ListView):
         return Account.objects.filter(owner=self.request.user)
 
 
-class AccountDetailView(DetailView):
+class AccountDetailView(LoginRequiredMixin, DetailView):
     model = Account
     template_name = 'banking/account_detail.html'
     context_object_name = 'account'
@@ -29,7 +30,7 @@ class AccountDetailView(DetailView):
         return Account.objects.filter(owner=self.request.user)
 
 
-class AccountCreateView(CreateView):
+class AccountCreateView(LoginRequiredMixin, CreateView):
     model = Account
     form_class = AccountForm
     template_name = 'banking/account_create.html'
@@ -44,7 +45,7 @@ class AccountCreateView(CreateView):
         messages.success(self.request, "Account created successfully!")
         return super().form_valid(form)
 
-class AccountDeleteView(DeleteView):
+class AccountDeleteView(LoginRequiredMixin, DeleteView):
     model = Account
     template_name = 'banking/account_confirm_delete.html'
     success_url = reverse_lazy('account-list')
@@ -61,7 +62,7 @@ class AccountDeleteView(DeleteView):
         return super().delete(request, *args, **kwargs)
 
 
-class TransactionListView(ListView):
+class TransactionListView(LoginRequiredMixin, ListView):
     model = Transaction
     template_name = 'banking/transaction_list.html'
     context_object_name = 'transactions'
@@ -75,7 +76,7 @@ class TransactionListView(ListView):
         ).order_by('-date')
 
 
-class TransferView(FormView):
+class TransferView(LoginRequiredMixin, FormView):
     form_class = TransferForm
     template_name = 'banking/transfer.html'
     success_url = reverse_lazy('transaction-list')
@@ -108,7 +109,7 @@ class TransferView(FormView):
         return super().form_valid(form)
 
 
-class CardListView(ListView):
+class CardListView(LoginRequiredMixin, ListView):
     model = Card
     template_name = 'banking/card_list.html'
     context_object_name = 'cards'
@@ -117,7 +118,7 @@ class CardListView(ListView):
         return Card.objects.filter(account__owner=self.request.user)
 
 
-class CardCreateView(CreateView):
+class CardCreateView(LoginRequiredMixin, CreateView):
     model = Card
     form_class = CardForm
     template_name = 'banking/card_create.html'
@@ -136,3 +137,16 @@ class CardCreateView(CreateView):
         card.save()
         messages.success(self.request, "Card created successfully!")
         return super().form_valid(form)
+
+
+class HomeView(LoginRequiredMixin, TemplateView):
+    template_name = 'banking/home.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        accounts = Account.objects.filter(owner=self.request.user)
+        context['accounts'] = accounts
+        context['transactions'] = Transaction.objects.filter(
+            Q(from_account__in=accounts) | Q(to_account__in=accounts)
+        ).order_by('-date')[:5]
+        return context

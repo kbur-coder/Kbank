@@ -1,9 +1,8 @@
-from django.shortcuts import render, redirect
-
-# Create your views here.
-from django.views.generic import CreateView, UpdateView, TemplateView, FormView
 from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import LoginView as AuthLoginView
+from django.shortcuts import redirect
+from django.views.generic import CreateView, TemplateView, UpdateView
 from django.urls import reverse_lazy
 from .models import User
 from .forms import RegisterForm, LoginForm, ProfileForm
@@ -30,7 +29,7 @@ class LoginView(AuthLoginView):
     def get_success_url(self):
         return reverse_lazy('profile')
 
-class ProfileView(TemplateView):
+class ProfileView(LoginRequiredMixin, TemplateView):
     template_name = 'accounts/profile.html'
 
     def get_context_data(self, **kwargs):
@@ -38,7 +37,7 @@ class ProfileView(TemplateView):
         context['user'] = self.request.user
         return context
 
-class EditProfileView(UpdateView):
+class EditProfileView(LoginRequiredMixin, UpdateView):
     model = User
     form_class = ProfileForm
     template_name = 'accounts/edit_profile.html'
@@ -48,7 +47,7 @@ class EditProfileView(UpdateView):
         return self.request.user
 
 
-class LogoutConfirmView(TemplateView):
+class LogoutConfirmView(LoginRequiredMixin, TemplateView):
     template_name = 'accounts/logout_confirm.html'
 
     def post(self, request, *args, **kwargs):
