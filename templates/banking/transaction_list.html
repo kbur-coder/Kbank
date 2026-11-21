@@ -29,7 +29,9 @@
                         <tr>
                             <td>{{ transaction.date|date:"d M Y H:i" }}</td>
                             <td>
-                                {% if transaction.from_account.owner == request.user %}
+                                {% if transaction.from_account is None %}
+                                <span class="text-muted">Пополнение</span>
+                                {% elif transaction.from_account.owner == request.user %}
                                 <span class="text-danger">Вы</span>
                                 {% else %}
                                 {{ transaction.from_account.number }}
@@ -42,10 +44,18 @@
                                 {{ transaction.to_account.number }}
                                 {% endif %}
                             </td>
-                            <td class="fw-bold {% if transaction.to_account.owner == request.user %}text-success{% else %}text-danger{% endif %}">
-                                {% if transaction.to_account.owner == request.user %}+{% else %}-{% endif %}
+                            {% if transaction.from_account.owner == request.user and transaction.to_account.owner == request.user %}
+                            <td class="fw-bold text-secondary">
                                 {{ transaction.amount }} {{ transaction.from_account.currency }}
+                                {% if transaction.from_account.currency != transaction.to_account.currency %}
+                                &rarr; {{ transaction.received_amount }} {{ transaction.to_account.currency }}
+                                {% endif %}
                             </td>
+                            {% elif transaction.to_account.owner == request.user %}
+                            <td class="fw-bold text-success">+{{ transaction.received_amount }} {{ transaction.to_account.currency }}</td>
+                            {% else %}
+                            <td class="fw-bold text-danger">-{{ transaction.amount }} {{ transaction.from_account.currency }}</td>
+                            {% endif %}
                             <td>{{ transaction.description|default:"-" }}</td>
                         </tr>
                         {% empty %}

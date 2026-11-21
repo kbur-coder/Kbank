@@ -32,12 +32,12 @@
                             <div class="d-flex w-100 justify-content-between">
                                 <h6 class="mb-1 {% if transaction.to_account.owner == user %}text-success{% else %}text-danger{% endif %}">
                                     {% if transaction.to_account.owner == user %}+{% else %}-{% endif %}
-                                    {{ transaction.amount }} {{ transaction.from_account.currency }}
+                                    {% if transaction.to_account.owner == user %}{{ transaction.received_amount }} {{ transaction.to_account.currency }}{% else %}{{ transaction.amount }} {{ transaction.from_account.currency }}{% endif %}
                                 </h6>
                                 <small>{{ transaction.date|timesince }} ago</small>
                             </div>
                             <p class="mb-1">
-                                From: {% if transaction.from_account.owner == user %}You{% else %}{{ transaction.from_account.number }}{% endif %}
+                                From: {% if transaction.from_account is None %}Top-up{% elif transaction.from_account.owner == user %}You{% else %}{{ transaction.from_account.number }}{% endif %}
                                 → To: {% if transaction.to_account.owner == user %}You{% else %}{{ transaction.to_account.number }}{% endif %}
                             </p>
                             {% if transaction.description %}

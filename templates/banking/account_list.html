@@ -27,7 +27,7 @@
                     <tbody>
                         {% for account in accounts %}
                         <tr>
-                            <td>{{ account.number }}</td>
+                            <td>{{ account.number }}{% if not account.is_active %} <span class="badge bg-secondary">закрыт</span>{% endif %}</td>
                             <td>{{ account.get_account_type_display }}</td>
                             <td class="fw-bold">{{ account.balance }}</td>
                             <td>{{ account.get_currency_display }}</td>
@@ -36,7 +36,7 @@
                                     <a href="{% url 'account-detail' account.pk %}" class="btn btn-sm btn-info">
                                         <i class="bi bi-eye"></i> Просмотр
                                     </a>
-                                    {% if account.balance == 0 %}
+                                    {% if account.balance == 0 and account.is_active %}
                                     <a href="{% url 'account-delete' account.pk %}" class="btn btn-sm btn-danger">
                                         <i class="bi bi-x-circle"></i> Закрыть
                                     </a>

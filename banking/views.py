@@ -1,79 +1,95 @@
-from django.shortcuts import render, redirect, get_object_or_404
-
-# Create your views here.
-
-
-from django.contrib.auth.mixins import LoginRequiredMixin
-from django.views.generic import ListView, DetailView, CreateView, DeleteView, FormView, TemplateView
-from django.urls import reverse_lazy
+from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Q
-from .models import Account, Transaction, Card
-from .forms import AccountForm, TransferForm, CardForm
+from django.http import Http404
+from django.shortcuts import get_object_or_404, redirect
+from django.urls import reverse, reverse_lazy
+from django.views import View
+from django.views.generic import FormView, ListView, TemplateView
+
+from . import services
+from .forms import AccountForm, CardForm, DepositForm, TransferForm
+from .models import Account, Card, Transaction
+
+
+class HomeView(LoginRequiredMixin, TemplateView):
+    template_name = 'banking/home.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        accounts = Account.objects.filter(owner=self.request.user, is_active=True)
+        context['accounts'] = accounts
+        context['transactions'] = (
+            Transaction.objects.filter(Q(from_account__owner=self.request.user) | Q(to_account__owner=self.request.user))
+            .select_related('from_account__owner', 'to_account__owner')
+            .order_by('-date', '-id')[:5]
+        )
+        return context
 
 
 class AccountListView(LoginRequiredMixin, ListView):
-    model = Account
     template_name = 'banking/account_list.html'
     context_object_name = 'accounts'
 
     def get_queryset(self):
-        return Account.objects.filter(owner=self.request.user)
+        return Account.objects.filter(owner=self.request.user).order_by('-is_active', 'id')
 
 
-class AccountDetailView(LoginRequiredMixin, DetailView):
-    model = Account
+class AccountDetailView(LoginRequiredMixin, TemplateView):
     template_name = 'banking/account_detail.html'
-    context_object_name = 'account'
 
-    def get_queryset(self):
-        return Account.objects.filter(owner=self.request.user)
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        account = get_object_or_404(Account, pk=self.kwargs['pk'], owner=self.request.user)
+        context['account'] = account
+        context['demo_mode'] = settings.DEMO_MODE
+        return context
 
 
-class AccountCreateView(LoginRequiredMixin, CreateView):
-    model = Account
+class AccountCreateView(LoginRequiredMixin, FormView):
     form_class = AccountForm
     template_name = 'banking/account_create.html'
     success_url = reverse_lazy('account-list')
 
     def form_valid(self, form):
-        account = form.save(commit=False)
-        account.owner = self.request.user
-        account.number = f"AC{self.request.user.id}{Account.objects.count() + 1}"
-        account.balance = 0
-        account.save()
-        messages.success(self.request, "Account created successfully!")
+        services.open_account(self.request.user, form.cleaned_data['account_type'], form.cleaned_data['currency'])
+        messages.success(self.request, "Счет открыт.")
         return super().form_valid(form)
 
-class AccountDeleteView(LoginRequiredMixin, DeleteView):
-    model = Account
+
+class AccountCloseView(LoginRequiredMixin, TemplateView):
     template_name = 'banking/account_confirm_delete.html'
-    success_url = reverse_lazy('account-list')
 
-    def get_queryset(self):
-        return Account.objects.filter(owner=self.request.user, balance=0)
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['account'] = get_object_or_404(
+            Account, pk=self.kwargs['pk'], owner=self.request.user, is_active=True
+        )
+        return context
 
-    def delete(self, request, *args, **kwargs):
-        account = self.get_object()
-        if account.balance > 0:
-            messages.error(request, "Cannot delete account with balance")
-            return redirect('account-detail', pk=account.pk)
-        messages.success(request, "Account deleted successfully!")
-        return super().delete(request, *args, **kwargs)
+    def post(self, request, *args, **kwargs):
+        try:
+            services.close_account(self.kwargs['pk'], request.user)
+        except services.BankError as error:
+            messages.error(request, str(error))
+            return redirect('account-detail', pk=self.kwargs['pk'])
+        messages.success(request, "Счет закрыт.")
+        return redirect('account-list')
 
 
 class TransactionListView(LoginRequiredMixin, ListView):
-    model = Transaction
     template_name = 'banking/transaction_list.html'
     context_object_name = 'transactions'
     paginate_by = 10
 
     def get_queryset(self):
-        user_accounts = Account.objects.filter(owner=self.request.user)
-        return Transaction.objects.filter(
-            Q(from_account__in=user_accounts) |
-            Q(to_account__in=user_accounts)
-        ).order_by('-date')
+        mine = Account.objects.filter(owner=self.request.user)
+        queryset = Transaction.objects.filter(Q(from_account__in=mine) | Q(to_account__in=mine))
+        account = self.request.GET.get('account')
+        if account and account.isdigit():
+            queryset = queryset.filter(Q(from_account_id=account) | Q(to_account_id=account))
+        return queryset.select_related('from_account__owner', 'to_account__owner').order_by('-date', '-id')
 
 
 class TransferView(LoginRequiredMixin, FormView):
@@ -86,40 +102,67 @@ class TransferView(LoginRequiredMixin, FormView):
         kwargs['user'] = self.request.user
         return kwargs
 
+    def get_initial(self):
+        initial = super().get_initial()
+        source = self.request.GET.get('from_account')
+        if source and source.isdigit():
+            initial['from_account'] = source
+        return initial
+
     def form_valid(self, form):
-        from_account = form.cleaned_data['from_account']
-        to_account = form.cleaned_data['to_account']
-        amount = form.cleaned_data['amount']
-        description = form.cleaned_data.get('description', '')
+        try:
+            services.transfer(
+                form.cleaned_data['from_account'].pk,
+                form.cleaned_data['to_account'].pk,
+                self.request.user,
+                form.cleaned_data['amount'],
+                form.cleaned_data['description'],
+            )
+        except services.BankError as error:
+            form.add_error(None, str(error))
+            return self.form_invalid(form)
+        messages.success(self.request, "Перевод выполнен.")
+        return super().form_valid(form)
 
-        from_account.balance -= amount
-        to_account.balance += amount
 
-        from_account.save()
-        to_account.save()
+class DepositView(LoginRequiredMixin, FormView):
+    form_class = DepositForm
+    template_name = 'banking/deposit.html'
 
-        Transaction.objects.create(
-            from_account=from_account,
-            to_account=to_account,
-            amount=amount,
-            description=description
+    def dispatch(self, request, *args, **kwargs):
+        if not settings.DEMO_MODE:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['account'] = get_object_or_404(
+            Account, pk=self.kwargs['pk'], owner=self.request.user, is_active=True
         )
+        return context
 
-        messages.success(self.request, "Transfer completed successfully!")
+    def get_success_url(self):
+        return reverse('account-detail', kwargs={'pk': self.kwargs['pk']})
+
+    def form_valid(self, form):
+        try:
+            services.deposit(self.kwargs['pk'], self.request.user, form.cleaned_data['amount'])
+        except services.BankError as error:
+            form.add_error(None, str(error))
+            return self.form_invalid(form)
+        messages.success(self.request, "Счет пополнен (демо).")
         return super().form_valid(form)
 
 
 class CardListView(LoginRequiredMixin, ListView):
-    model = Card
     template_name = 'banking/card_list.html'
     context_object_name = 'cards'
 
     def get_queryset(self):
-        return Card.objects.filter(account__owner=self.request.user)
+        return Card.objects.filter(account__owner=self.request.user).select_related('account').order_by('-id')
 
 
-class CardCreateView(LoginRequiredMixin, CreateView):
-    model = Card
+class CardCreateView(LoginRequiredMixin, FormView):
     form_class = CardForm
     template_name = 'banking/card_create.html'
     success_url = reverse_lazy('card-list')
@@ -130,23 +173,16 @@ class CardCreateView(LoginRequiredMixin, CreateView):
         return kwargs
 
     def form_valid(self, form):
-        card = form.save(commit=False)
-        account = form.cleaned_data['account']
-        card.number = f"4{self.request.user.id:04d}{account.id:04d}{Card.objects.count() + 1:04d}"
-        card.owner_name = f"{self.request.user.first_name} {self.request.user.last_name}"
-        card.save()
-        messages.success(self.request, "Card created successfully!")
+        try:
+            card, cvv = services.issue_card(
+                form.cleaned_data['account'].pk, self.request.user, form.cleaned_data['card_type']
+            )
+        except services.BankError as error:
+            form.add_error(None, str(error))
+            return self.form_invalid(form)
+        # The CVV is not stored, so this message is the only time it can be seen.
+        messages.success(
+            self.request,
+            f"Карта выпущена. CVV: {cvv}. Запомните его: повторно он не показывается.",
+        )
         return super().form_valid(form)
-
-
-class HomeView(LoginRequiredMixin, TemplateView):
-    template_name = 'banking/home.html'
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        accounts = Account.objects.filter(owner=self.request.user)
-        context['accounts'] = accounts
-        context['transactions'] = Transaction.objects.filter(
-            Q(from_account__in=accounts) | Q(to_account__in=accounts)
-        ).order_by('-date')[:5]
-        return context
